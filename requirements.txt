@@ -1,0 +1,3 @@
+textual
+watchdog
+markdown-it-py
