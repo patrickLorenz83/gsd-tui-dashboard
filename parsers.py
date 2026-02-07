@@ -69,6 +69,14 @@ class GSDParser:
         
         return {"phases": phases}
 
+    def infer_active_phase_from_roadmap(self) -> Optional[Dict[str, Any]]:
+        """Infers the active phase based on the first non-completed phase in ROADMAP.md."""
+        roadmap = self.parse_roadmap()
+        for phase in roadmap.get("phases", []):
+            if phase["status"] != "completed":
+                return phase
+        return None
+
     def parse_state(self) -> Dict[str, Any]:
         """Parses STATE.md for progress and status."""
         state_file = self.planning_path / "STATE.md"
@@ -100,20 +108,38 @@ class GSDParser:
         if velocity_match:
             data["avg_duration"] = velocity_match.group(1)
 
+        # Extract Status
+        status_match = re.search(r"Status: (.*)", content)
+        if status_match:
+            data["phase_status"] = status_match.group(1).strip()
+
         return data
 
     def get_phase_directory(self) -> Optional[Path]:
         """Finds the directory for the current phase."""
+        # Try state first
         state = self.parse_state()
-        if "current_phase" not in state:
-            return None
+        phase_num = None
         
-        # Extract phase number, e.g. "5" from "5 of 7 (Live Preview Panel)"
-        match = re.search(r"^(\d+)", state["current_phase"])
-        if not match:
+        if "current_phase" in state:
+             match = re.search(r"^(\d+)", state["current_phase"])
+             if match:
+                 phase_num = match.group(1).zfill(2)
+        
+        # If no phase num from state or state says complete, try roadmap inference
+        # Actually, let's prioritize roadmap if state says "complete" or if we want the "next" phase
+        # But for now, let's just fallback to roadmap if state is missing or we want to be smarter
+        
+        if not phase_num:
+             active_phase = self.infer_active_phase_from_roadmap()
+             if active_phase:
+                  match = re.search(r"Phase (\d+)", active_phase['name'])
+                  if match:
+                       phase_num = match.group(1).zfill(2)
+
+        if not phase_num:
             return None
             
-        phase_num = match.group(1).zfill(2) # "05"
         phases_dir = self.planning_path / "phases"
         
         if not phases_dir.exists():
@@ -124,6 +150,8 @@ class GSDParser:
             if child.is_dir() and child.name.startswith(phase_num):
                 return child
         return None
+
+
 
     def parse_phase_docs(self) -> Dict[str, str]:
         """Reads content of Context, Research, and Verification docs for active phase."""
@@ -157,6 +185,41 @@ class GSDParser:
             
         return docs
 
+    def parse_pending_todos(self) -> List[Dict[str, Any]]:
+        """Parses pending todos from .planning/todos/pending directory."""
+        todos_dir = self.planning_path / "todos" / "pending"
+        if not todos_dir.exists():
+            return []
+            
+        todos = []
+        for file in todos_dir.glob("*.md"):
+            # prettify filename: 2026-02-07-settings-detail-page-refactor.md -> Settings detail page refactor
+            name = file.stem
+            # Remove date prefix if present
+            name = re.sub(r"^\d{4}-\d{2}-\d{2}-", "", name)
+            # Replace dashes with spaces
+            name = name.replace("-", " ")
+            # Capitalize
+            name = name.capitalize()
+            
+            todos.append({"text": name, "checked": False})
+            
+        return todos
+
+    def get_latest_phase_summary(self) -> Optional[str]:
+        """Gets the content of the latest SUMMARY.md in the current phase."""
+        phase_dir = self.get_phase_directory()
+        if not phase_dir:
+            return None
+            
+        summary_files = sorted(list(phase_dir.glob("*-SUMMARY.md")))
+        if not summary_files:
+            return None
+            
+        # Get the last one (latest)
+        latest = summary_files[-1]
+        return latest.read_text(encoding="utf-8")
+
     def get_all_data(self) -> Dict[str, Any]:
         """Aggregates all data."""
         return {
@@ -164,4 +227,6 @@ class GSDParser:
             "roadmap": self.parse_roadmap(),
             "state": self.parse_state(),
             "phase_docs": self.parse_phase_docs(),
+            "pending_todos": self.parse_pending_todos(),
+            "latest_summary": self.get_latest_phase_summary(),
         }

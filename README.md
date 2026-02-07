@@ -9,8 +9,9 @@ This tool is designed to work with the "GSD" (Get Shit Done) planning methodolog
 -   **Dashboard View**:
     -   **Roadmap**: Visual list of project phases with status indicators. Current phase is highlighted and pulses.
     -   **Project Stats**: Progress bars, velocity metrics, and last activity timestamps.
-    -   **Active Tasks**: Checklist of currently active tasks from `PROJECT.md`.
+    -   **Pending Todos**: List of pending tasks dynamically loaded from `.planning/todos/pending/`.
 -   **Documentation Tabs**:
+    -   **Summary**: Auto-loads the latest `*-SUMMARY.md` for a quick phase overview.
     -   View Context, Research, Plans, and Verification documents for the *current phase* directly in the dashboard.
 -   **Live Updates**:
     -   Automatically refreshes when planning files are modified.
