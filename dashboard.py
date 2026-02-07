@@ -15,6 +15,8 @@ from watchdog.events import FileSystemEventHandler
 
 from parsers import GSDParser
 
+__version__ = "0.0.2"
+
 class DashboardData(Static):
     """Holds the data and updates the UI."""
     def __init__(self, parser: GSDParser):
