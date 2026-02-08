@@ -350,3 +350,241 @@ class TestInferActivePhase:
         result = parser.infer_active_phase_from_roadmap()
 
         assert result is None
+
+
+class TestParseStatePhaseFormats:
+    """Tests for STATE.md phase format parsing."""
+
+    def test_parse_state_active_format(self, parser):
+        """Test parsing active phase format: 'Phase: 5 of 7 (Template Versioning)'."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("Phase: 5 of 7 (Template Versioning)\n")
+
+        result = parser.parse_state()
+
+        assert result["current_phase"] == "5 of 7 (Template Versioning)"
+        assert result["phase_number"] == 5
+        assert result["total_phases"] == 7
+        assert result["phase_name"] == "Template Versioning"
+
+    def test_parse_state_completed_milestone_format(self, parser):
+        """Test parsing completed milestone format: 'Phase: v1.0 complete — 7 of 7 phases shipped'."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("Phase: v1.0 complete — 7 of 7 phases shipped\n")
+
+        result = parser.parse_state()
+
+        assert result["current_phase"] == "v1.0 complete"
+        assert result["milestone_complete"] is True
+        assert result["milestone_version"] == "v1.0"
+        assert result["phases_shipped"] == 7
+        assert result["total_phases"] == 7
+
+    def test_parse_state_not_started_format(self, parser):
+        """Test parsing not started format: 'Phase: Not started'."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("Phase: Not started\n")
+
+        result = parser.parse_state()
+
+        assert result["current_phase"] == "Not started"
+        assert result["phase_status"] == "not_started"
+
+    def test_parse_state_simple_format(self, parser):
+        """Test parsing simple format: 'Phase: 1 of 2 (Robust Parsing)'."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("Phase: 1 of 2 (Robust Parsing)\n")
+
+        result = parser.parse_state()
+
+        assert result["current_phase"] == "1 of 2 (Robust Parsing)"
+        assert result["phase_number"] == 1
+        assert result["total_phases"] == 2
+        assert result["phase_name"] == "Robust Parsing"
+
+    def test_parse_state_missing_phase_line(self, parser):
+        """Test parsing content without Phase line."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("Status: In progress\nLast activity: 2026-02-08\n")
+
+        result = parser.parse_state()
+
+        assert "current_phase" not in result or result.get("current_phase") == ""
+
+
+class TestParseStateProgressFormats:
+    """Tests for STATE.md progress format parsing."""
+
+    def test_parse_state_progress_bar_60(self, parser):
+        """Test parsing progress bar format: 'Progress: [██████░░░░] 60%'."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("Progress: [██████░░░░] 60%\n")
+
+        result = parser.parse_state()
+
+        assert result["progress_percent"] == 60
+
+    def test_parse_state_progress_bar_100(self, parser):
+        """Test parsing full progress bar: 'Progress: [██████████] 100%'."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("Progress: [██████████] 100%\n")
+
+        result = parser.parse_state()
+
+        assert result["progress_percent"] == 100
+
+    def test_parse_state_progress_bar_0(self, parser):
+        """Test parsing empty progress bar: 'Progress: [░░░░░░░░░░] 0%'."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("Progress: [░░░░░░░░░░] 0%\n")
+
+        result = parser.parse_state()
+
+        assert result["progress_percent"] == 0
+
+    def test_parse_state_progress_count_100(self, parser):
+        """Test parsing count format: '100% (16/16 plans completed)'."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("100% (16/16 plans completed)\n")
+
+        result = parser.parse_state()
+
+        assert result["progress_percent"] == 100
+
+    def test_parse_state_progress_count_75(self, parser):
+        """Test parsing count format partial: '75% (12/16 plans completed)'."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("75% (12/16 plans completed)\n")
+
+        result = parser.parse_state()
+
+        assert result["progress_percent"] == 75
+
+    def test_parse_state_no_progress_line(self, parser):
+        """Test parsing content without progress line."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("Phase: 1 of 2 (Test)\nStatus: In progress\n")
+
+        result = parser.parse_state()
+
+        assert result["progress_percent"] == 0
+
+
+class TestParseStateFullDocument:
+    """Tests for full STATE.md document parsing."""
+
+    def test_parse_state_active_document(self, parser):
+        """Test parsing complete active state document."""
+        state_file = parser.planning_path / "STATE.md"
+        content = """# Project State
+
+## Current Position
+
+Phase: 1 of 2 (Robust Parsing)
+Plan: 0 of TBD in current phase
+Status: Ready to plan
+Last activity: 2026-02-08 — Roadmap created
+Progress: [░░░░░░░░░░] 0%
+Average duration: N/A
+"""
+        state_file.write_text(content)
+
+        result = parser.parse_state()
+
+        assert result["current_phase"] == "1 of 2 (Robust Parsing)"
+        assert result["phase_number"] == 1
+        assert result["total_phases"] == 2
+        assert result["phase_name"] == "Robust Parsing"
+        assert result["progress_percent"] == 0
+        assert "2026-02-08" in result["last_activity"]
+        assert result["phase_status"] == "Ready to plan"
+        assert result["avg_duration"] == "N/A"
+
+    def test_parse_state_completed_milestone_document(self, parser):
+        """Test parsing complete milestone document."""
+        state_file = parser.planning_path / "STATE.md"
+        content = """# Project State
+
+Phase: v1.0 complete — 7 of 7 phases shipped
+Status: Shipped
+Last activity: 2026-02-01 — All phases complete
+Progress: [██████████] 100%
+"""
+        state_file.write_text(content)
+
+        result = parser.parse_state()
+
+        assert result["milestone_complete"] is True
+        assert result["milestone_version"] == "v1.0"
+        assert result["phases_shipped"] == 7
+        assert result["total_phases"] == 7
+        assert result["progress_percent"] == 100
+        assert result["phase_status"] == "Shipped"
+
+    def test_parse_state_not_started_document(self, parser):
+        """Test parsing not started document."""
+        state_file = parser.planning_path / "STATE.md"
+        content = """# Project State
+
+Phase: Not started
+Status: Not started
+Last activity: N/A
+Progress: [░░░░░░░░░░] 0%
+"""
+        state_file.write_text(content)
+
+        result = parser.parse_state()
+
+        assert result["current_phase"] == "Not started"
+        assert result["phase_status"] == "not_started"
+        assert result["progress_percent"] == 0
+        assert result["last_activity"] == "N/A"
+
+
+class TestParseStateEdgeCases:
+    """Tests for STATE.md edge cases and error handling."""
+
+    def test_parse_state_missing_file(self, parser):
+        """Test parsing when STATE.md doesn't exist."""
+        # Don't create the file
+        result = parser.parse_state()
+
+        assert result == {}
+
+    def test_parse_state_empty_file(self, parser):
+        """Test parsing empty STATE.md file."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("")
+
+        result = parser.parse_state()
+
+        assert result["progress_percent"] == 0
+
+    def test_parse_state_only_status(self, parser):
+        """Test parsing STATE.md with only Status line."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("Status: In progress\n")
+
+        result = parser.parse_state()
+
+        assert result["phase_status"] == "In progress"
+        assert "current_phase" not in result or result.get("current_phase") == ""
+
+
+class TestGetAllDataIntegration:
+    """Tests for get_all_data integration with enriched state dict."""
+
+    def test_get_all_data_returns_enriched_state(self, parser):
+        """Verify dashboard.py can consume enriched state dict via get_all_data()."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("Phase: 5 of 7 (Template Versioning)\nProgress: [██████░░░░] 60%\n")
+        roadmap_file = parser.planning_path / "ROADMAP.md"
+        roadmap_file.write_text("- [/] **Phase 5: Template Versioning** - Current work\n")
+
+        data = parser.get_all_data()
+        state = data["state"]
+
+        assert state["phase_number"] == 5
+        assert state["total_phases"] == 7
+        assert state["progress_percent"] == 60
+        assert "current_phase" in state
