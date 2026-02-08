@@ -39,68 +39,90 @@ class RoadmapView(Static):
 
     def update_roadmap(self, phases, current_phase_info=None, phase_status=None):
         container = self.query_one("#roadmap-list")
-        container.remove_children()
-        
-        # Extract phase number from "6 of 7 (Template Versioning)" -> "6"
-        current_phase_num = None
-        if current_phase_info:
-            # Try "6 of 7" format first
-            match = re.search(r"^(\d+)", current_phase_info)
-            if match:
-                current_phase_num = int(match.group(1))
-            else:
-                # Try "Phase 6" format
-                match = re.search(r"Phase (\d+)", current_phase_info)
+        try:
+            container.remove_children()
+
+            if not phases:
+                container.mount(Label("No roadmap available.", classes="empty-state"))
+                return
+
+            # Extract phase number from "6 of 7 (Template Versioning)" -> "6"
+            current_phase_num = None
+            if current_phase_info:
+                # Try "6 of 7" format first
+                match = re.search(r"^(\d+)", current_phase_info)
                 if match:
-                     current_phase_num = int(match.group(1))
+                    current_phase_num = int(match.group(1))
+                else:
+                    # Try "Phase 6" format
+                    match = re.search(r"Phase (\d+)", current_phase_info)
+                    if match:
+                         current_phase_num = int(match.group(1))
 
-        for phase in phases:
-            status = phase.get("status", "pending")
-            icon = "○"
-            if status == "completed":
-                icon = "●"
-            elif status == "in_progress":
-                icon = "◐"
-            
-            label_text = f"{icon} {phase['name']}"
-            
-            is_active = False
-            # Extract phase number from "Phase 6: Template Versioning" -> "6"
-            phase_match = re.search(r"Phase (\d+)", phase['name'])
-            if phase_match and current_phase_num is not None:
-                if int(phase_match.group(1)) == current_phase_num:
-                    is_active = True
-            
-            # If the current phase is marked as completed in state, don't pulse it
-            if is_active and phase_status and "complete" in phase_status.lower():
+            for phase in phases:
+                status = phase.get("status", "pending")
+                icon = "○"
+                if status == "completed":
+                    icon = "●"
+                elif status == "in_progress":
+                    icon = "◐"
+
+                label_text = f"{icon} {phase['name']}"
+
                 is_active = False
-            
-            if is_active:
-                label = PulseLabel(label_text)
-                label.add_class("active-phase")
-            else:
-                label = Label(label_text)
-            
-            container.mount(label)
+                # Extract phase number from "Phase 6: Template Versioning" -> "6"
+                phase_match = re.search(r"Phase (\d+)", phase['name'])
+                if phase_match and current_phase_num is not None:
+                    if int(phase_match.group(1)) == current_phase_num:
+                        is_active = True
 
-class PendingTodosView(Static):
+                # If the current phase is marked as completed in state, don't pulse it
+                if is_active and phase_status and "complete" in phase_status.lower():
+                    is_active = False
+
+                if is_active:
+                    label = PulseLabel(label_text)
+                    label.add_class("active-phase")
+                else:
+                    label = Label(label_text)
+
+                container.mount(label)
+        except Exception as e:
+            container.mount(Label(f"Error displaying roadmap: {str(e)}"))
+
+class TodosView(Static):
     def compose(self) -> ComposeResult:
-        yield Label("Pending Todos", id="active-header")
+        yield Label("Todos", id="active-header")
         yield Vertical(id="active-list")
 
-    def update_todos(self, todos):
+    def update_todos(self, pending, completed):
         container = self.query_one("#active-list")
-        container.remove_children()
-        
-        if not todos:
-             container.mount(Label("No pending todos found."))
-             return
+        try:
+            container.remove_children()
 
-        for todo in todos:
-            # We don't really have checked status for pending todos (they are files)
-            # But let's keep the UI consistent or just show a bullet
-            icon = "•" 
-            container.mount(Label(f"{icon} {todo['text']}"))
+            if not pending and not completed:
+                container.mount(Label("No todos found.", classes="empty-state"))
+                return
+
+            # Pending section
+            if pending:
+                for todo in pending:
+                    text = todo.get("text", "Unknown todo")
+                    container.mount(Label(f"  • {text}"))
+
+            # Separator
+            if pending and completed:
+                container.mount(Label(""))
+
+            # Completed section
+            if completed:
+                for todo in completed:
+                    text = todo.get("text", "Unknown todo")
+                    label = Label(f"  ✓ {text}")
+                    label.add_class("completed-todo")
+                    container.mount(label)
+        except Exception as e:
+            container.mount(Label(f"Error displaying todos: {str(e)}"))
 
 class ProjectStatsView(Static):
     def compose(self) -> ComposeResult:
@@ -111,12 +133,29 @@ class ProjectStatsView(Static):
         yield Label("0%", id="progress-label")
 
     def update_stats(self, state):
-        self.query_one("#stats-phase").update(f"Phase: {state.get('current_phase', 'N/A')}")
-        self.query_one("#stats-activity").update(f"Last Activity: {state.get('last_activity', 'N/A')}")
-        
-        progress = state.get("progress_percent", 0)
-        self.query_one("#progress-bar").update(progress=progress)
-        self.query_one("#progress-label").update(f"{progress}%")
+        try:
+            milestone_complete = state.get("milestone_complete", False)
+
+            if milestone_complete:
+                version = state.get("milestone_version", "")
+                phase_text = f"Milestone {version} Complete!" if version else "Milestone Complete!"
+                self.query_one("#stats-phase").update(phase_text)
+                self.query_one("#progress-bar").update(progress=100)
+                self.query_one("#progress-label").update("100%")
+            else:
+                current_phase = state.get("current_phase", "N/A")
+                self.query_one("#stats-phase").update(f"Phase: {current_phase}")
+                progress = state.get("progress_percent", 0)
+                self.query_one("#progress-bar").update(progress=progress)
+                self.query_one("#progress-label").update(f"{progress}%")
+
+            last_activity = state.get("last_activity", "N/A")
+            self.query_one("#stats-activity").update(f"Last Activity: {last_activity}")
+        except Exception as e:
+            try:
+                self.query_one("#stats-phase").update(f"Error: {str(e)}")
+            except Exception:
+                pass
 
 class FocusableMarkdown(Container):
     """A scrollable container for Markdown content that handles focus."""
@@ -222,6 +261,16 @@ class GSDDashboardApp(App):
         text-style: bold;
         background: $accent 20%;
     }
+
+    .completed-todo {
+        color: $text-muted;
+        text-style: dim;
+    }
+
+    .empty-state {
+        color: $text-muted;
+        text-style: italic;
+    }
     """
 
     auto_refresh = reactive(True)
@@ -253,7 +302,7 @@ class GSDDashboardApp(App):
                         yield RoadmapView(id="roadmap-view")
                     with Vertical(id="right-pane"):
                         yield ProjectStatsView(id="stats-view")
-                        yield PendingTodosView(id="active-tasks-view")
+                        yield TodosView(id="active-tasks-view")
             
             with TabPane("Summary", id="summary"):
                  yield FocusableMarkdown(id="md-summary", classes="scrollable-md")
@@ -327,52 +376,52 @@ class GSDDashboardApp(App):
         self.auto_refresh = not self.auto_refresh
 
     def action_refresh_data(self):
-        # Parse data
-        data = self.parser.get_all_data()
-        project_data = data.get("project", {})
-        roadmap_data = data.get("roadmap", {})
-        state_data = data.get("state", {})
-        phase_docs = data.get("phase_docs", {})
-        
-        pending_todos = data.get("pending_todos", [])
-        latest_summary = data.get("latest_summary", "*No summary found for current phase.*")
-        
-        current_phase = state_data.get('current_phase', '')
-        phase_status = state_data.get('phase_status', '')
-        inferred_phase = data.get("inferred_active_phase")
+        try:
+            data = self.parser.get_all_data()
+            project_data = data.get("project", {})
+            roadmap_data = data.get("roadmap", {})
+            state_data = data.get("state", {})
+            phase_docs = data.get("phase_docs", {})
 
-        # If the state says the current phase is complete, but we have an inferred "next" phase
-        # from the roadmap that is pending/in-progress, use that for highlighting.
-        target_phase_info = current_phase
-        target_status = phase_status
+            pending_todos = data.get("pending_todos", [])
+            completed_todos = data.get("completed_todos", [])
+            latest_summary = data.get("latest_summary", "*No summary found for current phase.*")
 
-        if phase_status and "complete" in phase_status.lower() and inferred_phase:
-             target_phase_info = inferred_phase['name']
-             target_status = "in_progress" # Force it to look active so it pulses
+            current_phase = state_data.get('current_phase', '')
+            phase_status = state_data.get('phase_status', '')
+            inferred_phase = data.get("inferred_active_phase")
 
-        # Update Views
-        self.query_one("#roadmap-view").update_roadmap(roadmap_data.get("phases", []), target_phase_info, target_status)
-        self.query_one("#stats-view").update_stats(state_data)
-        self.query_one("#active-tasks-view").update_todos(pending_todos)
-        
-        # Update Markdown Tabs
-        self.query_one("#md-summary").update(latest_summary)
-        
-        # Update Markdown Tabs
-        self.query_one("#md-context").update(phase_docs.get("context", "*No Context document found for current phase.*"))
-        self.query_one("#md-research").update(phase_docs.get("research", "*No Research document found for current phase.*"))
-        self.query_one("#md-review").update(phase_docs.get("verification", "*No Verification document found for current phase.*"))
-        
-        # Helper for plans
-        plans = phase_docs.get("plans", [])
-        if plans:
-            # Concatenate plans or show latest? Let's show all for now separated by lines
-            plan_md = ""
-            for p in plans:
-                plan_md += f"# {p['name']}\n\n{p['content']}\n\n---\n\n"
-            self.query_one("#md-app-plans").update(plan_md)
-        else:
-             self.query_one("#md-app-plans").update("*No Plans found for current phase.*")
+            # If the state says the current phase is complete, but we have an inferred "next" phase
+            # from the roadmap that is pending/in-progress, use that for highlighting.
+            target_phase_info = current_phase
+            target_status = phase_status
+
+            if phase_status and "complete" in phase_status.lower() and inferred_phase:
+                 target_phase_info = inferred_phase['name']
+                 target_status = "in_progress"
+
+            # Update Views
+            self.query_one("#roadmap-view").update_roadmap(roadmap_data.get("phases", []), target_phase_info, target_status)
+            self.query_one("#stats-view").update_stats(state_data)
+            self.query_one("#active-tasks-view").update_todos(pending_todos, completed_todos)
+
+            # Update Markdown Tabs
+            self.query_one("#md-summary").update(latest_summary)
+
+            self.query_one("#md-context").update(phase_docs.get("context", "*No Context document found for current phase.*"))
+            self.query_one("#md-research").update(phase_docs.get("research", "*No Research document found for current phase.*"))
+            self.query_one("#md-review").update(phase_docs.get("verification", "*No Verification document found for current phase.*"))
+
+            plans = phase_docs.get("plans", [])
+            if plans:
+                plan_md = ""
+                for p in plans:
+                    plan_md += f"# {p['name']}\n\n{p['content']}\n\n---\n\n"
+                self.query_one("#md-app-plans").update(plan_md)
+            else:
+                 self.query_one("#md-app-plans").update("*No Plans found for current phase.*")
+        except Exception as e:
+            self.notify(f"Refresh error: {str(e)}", severity="error")
 
     def start_watcher(self):
         event_handler = Handler(self)
