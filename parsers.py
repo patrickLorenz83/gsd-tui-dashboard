@@ -37,36 +37,163 @@ class GSDParser:
                 
         return {"active_tasks": active_tasks}
 
+    def _parse_checkbox_phase(self, line: str) -> Optional[Dict[str, Any]]:
+        """
+        Parse checkbox format phase line.
+
+        Examples:
+            - [x] **Phase 1: Setup** - Initial setup
+            - [ ] **Phase 2: Implementation**
+            - [/] **Phase 3: Testing** - Run tests
+
+        Returns:
+            Dict with name, description, and status, or None if not a match.
+        """
+        # Updated regex to handle extra whitespace more flexibly
+        match = re.match(
+            r"- \[(?P<status>.)\]\s*\*\*(?P<name>Phase\s+[\d\.]+:.*?)\*\*(?:\s*-\s*(?P<desc>.*))?$",
+            line.strip()
+        )
+        if not match:
+            return None
+
+        status_char = match.group("status")
+        name = match.group("name")
+        desc = match.group("desc") or ""
+
+        # Map checkbox status to standard status
+        status_map = {"x": "completed", "X": "completed", "/": "in_progress", " ": "pending"}
+        status = status_map.get(status_char, "pending")
+
+        return {
+            "name": name,
+            "description": desc.strip(),
+            "status": status
+        }
+
+    def _parse_table_phase(self, line: str) -> Optional[Dict[str, Any]]:
+        """
+        Parse table format phase line.
+
+        Examples:
+            | 1. Foundation | v1.0 | 3/3 | Complete |
+            | 2. Features | v1.0 | 5/5 | In Progress |
+            | 3. Polish | v1.0 | 0/2 | Not started |
+
+        Returns:
+            Dict with name, description, and status, or None if not a valid table row.
+        """
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            return None
+
+        # Split by | and clean up
+        parts = [p.strip() for p in stripped.split("|") if p.strip()]
+
+        # Need at least 4 columns: Phase, Milestone, Plans, Status
+        if len(parts) < 4:
+            return None
+
+        # Skip header row (contains "Phase" as first word) and separator row
+        first_part = parts[0].lower()
+        if "phase" in first_part or parts[0].startswith("-"):
+            return None
+
+        # Extract phase number and title from first column
+        # Format: "1. Title" or "1. Title text"
+        phase_match = re.match(r"(\d+)\.\s*(.*)", parts[0])
+        if not phase_match:
+            return None
+
+        phase_num = phase_match.group(1)
+        phase_title = phase_match.group(2).strip()
+
+        # Extract status from last column (4th column)
+        status_text = parts[3].lower()
+
+        # Map status text to standard status
+        if "complete" in status_text or "shipped" in status_text:
+            status = "completed"
+        elif "progress" in status_text or "active" in status_text:
+            status = "in_progress"
+        else:
+            status = "pending"
+
+        return {
+            "name": f"Phase {phase_num}: {phase_title}",
+            "description": "",
+            "status": status
+        }
+
+    def _parse_shipped_line(self, line: str) -> Optional[Dict[str, Any]]:
+        """
+        Parse SHIPPED milestone line.
+
+        Examples:
+            - SHIPPED **v1.0 Parser Stabilization** — Phases 1-7
+            - SHIPPED **v2.0 Feature Set** - Phases 1-3
+
+        Returns:
+            Dict with version, name, phases, and status="shipped", or None if not a match.
+        """
+        # Match SHIPPED lines with em dash (—) or regular dash (-)
+        match = re.match(
+            r"- SHIPPED\s+\*\*(?P<version>v[\d\.]+)\s+(?P<name>.*?)\*\*\s*[—\-]\s*Phases?\s*(?P<phases>[\d\-,\s]+)",
+            line.strip()
+        )
+        if not match:
+            return None
+
+        version = match.group("version")
+        name = match.group("name").strip()
+        phases = match.group("phases").strip()
+
+        return {
+            "name": f"{version} {name}",
+            "description": f"Phases {phases}",
+            "status": "shipped",
+            "version": version,
+            "phases": phases
+        }
+
     def parse_roadmap(self) -> Dict[str, Any]:
-        """Parses ROADMAP.md for phases."""
+        """
+        Parses ROADMAP.md for phases, supporting multiple formats:
+        - Checkbox format: - [x] **Phase 1: Title** - Description
+        - Table format: | 1. Title | v1.0 | 3/3 | Complete |
+        - SHIPPED lines: - SHIPPED **v1.0 Title** — Phases 1-3
+
+        Returns:
+            Dict with 'phases' key containing list of phase dicts.
+        """
         roadmap_file = self.planning_path / "ROADMAP.md"
         if not roadmap_file.exists():
             return {"phases": []}
 
         content = roadmap_file.read_text(encoding="utf-8")
         phases = []
-        
-        lines = content.splitlines()
-        for line in lines:
-            line = line.strip()
-            # Match lines like "- [x] **Phase 1: Title** - Description"
-            # or "- [ ] **Phase 6: Title**"
-            match = re.match(r"- \[(?P<status>.)\] \*\*(?P<name>Phase [\d\.]+:.*?)\*\*(?: - (?P<desc>.*))?", line)
-            if match:
-                status_char = match.group("status")
-                name = match.group("name")
-                desc = match.group("desc") or ""
-                
-                status = "completed" if status_char.lower() == "x" else "pending"
-                if status_char == "/": # In progress
-                     status = "in_progress"
 
-                phases.append({
-                    "name": name,
-                    "description": desc,
-                    "status": status
-                })
-        
+        for line in content.splitlines():
+            stripped = line.strip()
+
+            # Try checkbox format first (most common during active development)
+            result = self._parse_checkbox_phase(stripped)
+            if result:
+                phases.append(result)
+                continue
+
+            # Try SHIPPED line
+            result = self._parse_shipped_line(stripped)
+            if result:
+                phases.append(result)
+                continue
+
+            # Try table format
+            result = self._parse_table_phase(stripped)
+            if result:
+                phases.append(result)
+                continue
+
         return {"phases": phases}
 
     def infer_active_phase_from_roadmap(self) -> Optional[Dict[str, Any]]:
