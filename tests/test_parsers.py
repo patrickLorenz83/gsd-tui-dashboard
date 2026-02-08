@@ -571,6 +571,71 @@ class TestParseStateEdgeCases:
         assert "current_phase" not in result or result.get("current_phase") == ""
 
 
+class TestParseCompletedTodos:
+    """Tests for completed todo parsing from todos/done/ directory."""
+
+    def test_parse_completed_todos_basic(self, parser):
+        """Test parsing basic completed todos."""
+        todos_dir = parser.planning_path / "todos" / "done"
+        todos_dir.mkdir(parents=True)
+
+        (todos_dir / "fix-login-bug.md").write_text("")
+        (todos_dir / "add-settings-page.md").write_text("")
+
+        result = parser.parse_completed_todos()
+
+        assert len(result) == 2
+        for todo in result:
+            assert "text" in todo
+            assert "checked" in todo
+            assert todo["checked"] is True
+            assert isinstance(todo["text"], str)
+
+    def test_parse_completed_todos_with_date_prefix(self, parser):
+        """Test that date prefixes are stripped and text is prettified."""
+        todos_dir = parser.planning_path / "todos" / "done"
+        todos_dir.mkdir(parents=True)
+
+        (todos_dir / "2026-02-07-settings-detail-page-refactor.md").write_text("")
+
+        result = parser.parse_completed_todos()
+
+        assert len(result) == 1
+        assert result[0]["text"] == "Settings detail page refactor"
+        assert result[0]["checked"] is True
+
+    def test_parse_completed_todos_empty_directory(self, parser):
+        """Test parsing when todos/done/ directory exists but is empty."""
+        todos_dir = parser.planning_path / "todos" / "done"
+        todos_dir.mkdir(parents=True)
+
+        result = parser.parse_completed_todos()
+
+        assert result == []
+
+    def test_parse_completed_todos_missing_directory(self, parser):
+        """Test parsing when todos/done/ directory doesn't exist."""
+        result = parser.parse_completed_todos()
+
+        assert result == []
+
+    def test_parse_completed_todos_sorted(self, parser):
+        """Test that completed todos are sorted alphabetically by text."""
+        todos_dir = parser.planning_path / "todos" / "done"
+        todos_dir.mkdir(parents=True)
+
+        (todos_dir / "c-task.md").write_text("")
+        (todos_dir / "a-task.md").write_text("")
+        (todos_dir / "b-task.md").write_text("")
+
+        result = parser.parse_completed_todos()
+
+        assert len(result) == 3
+        assert result[0]["text"] == "A task"
+        assert result[1]["text"] == "B task"
+        assert result[2]["text"] == "C task"
+
+
 class TestGetAllDataIntegration:
     """Tests for get_all_data integration with enriched state dict."""
 
@@ -588,3 +653,24 @@ class TestGetAllDataIntegration:
         assert state["total_phases"] == 7
         assert state["progress_percent"] == 60
         assert "current_phase" in state
+
+    def test_get_all_data_includes_completed_todos_and_inferred_phase(self, parser):
+        """Verify get_all_data() includes completed_todos and inferred_active_phase keys."""
+        # Create completed todo
+        todos_dir = parser.planning_path / "todos" / "done"
+        todos_dir.mkdir(parents=True)
+        (todos_dir / "completed-task.md").write_text("")
+
+        # Create roadmap with pending phase
+        roadmap_file = parser.planning_path / "ROADMAP.md"
+        roadmap_file.write_text("- [ ] **Phase 1: Setup** - Initial phase\n")
+
+        data = parser.get_all_data()
+
+        assert "completed_todos" in data
+        assert len(data["completed_todos"]) == 1
+        assert data["completed_todos"][0]["text"] == "Completed task"
+
+        assert "inferred_active_phase" in data
+        assert data["inferred_active_phase"] is not None
+        assert data["inferred_active_phase"]["name"] == "Phase 1: Setup"
