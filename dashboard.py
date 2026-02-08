@@ -440,12 +440,14 @@ class Handler(FileSystemEventHandler):
     def __init__(self, app):
         self.app = app
 
-    def on_modified(self, event):
+    def on_any_event(self, event):
         if event.is_directory:
             return
         if not self.app.auto_refresh:
             return
-        if event.src_path.endswith(".md"):
+        src = getattr(event, "src_path", "") or ""
+        dest = getattr(event, "dest_path", "") or ""
+        if src.endswith(".md") or dest.endswith(".md"):
             self.app.call_from_thread(self.app.action_refresh_data)
 
 if __name__ == "__main__":
