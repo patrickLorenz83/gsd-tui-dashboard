@@ -204,41 +204,126 @@ class GSDParser:
                 return phase
         return None
 
+    def _parse_state_phase(self, content: str) -> Dict[str, Any]:
+        """
+        Parse phase info from STATE.md - handle multiple formats.
+
+        Supports:
+        - Format 1: "Phase: 5 of 7 (Template Versioning)"
+        - Format 2: "Phase: v1.0 complete — 7 of 7 phases shipped"
+        - Format 3: "Phase: Not started"
+        - Format 4: Generic fallback - "Phase: anything"
+
+        Returns:
+            Dict with phase information (phase_number, total_phases, phase_name,
+            milestone_complete, etc.) or empty dict if no phase line found.
+        """
+        result = {}
+
+        # Format 1: "Phase: 5 of 7 (Template Versioning)"
+        match = re.search(r"Phase:\s*(\d+)\s+of\s+(\d+)\s*\(([^)]+)\)", content)
+        if match:
+            result["phase_number"] = int(match.group(1))
+            result["total_phases"] = int(match.group(2))
+            result["phase_name"] = match.group(3)
+            result["current_phase"] = f"{match.group(1)} of {match.group(2)} ({match.group(3)})"
+            return result
+
+        # Format 2: "Phase: v1.0 complete — 7 of 7 phases shipped"
+        match = re.search(
+            r"Phase:\s*(v[\d\.]+)\s+complete\s*[—\-]\s*(\d+)\s+of\s+(\d+)\s+phases?\s+shipped",
+            content
+        )
+        if match:
+            result["milestone_version"] = match.group(1)
+            result["phases_shipped"] = int(match.group(2))
+            result["total_phases"] = int(match.group(3))
+            result["current_phase"] = f"{match.group(1)} complete"
+            result["milestone_complete"] = True
+            return result
+
+        # Format 3: "Phase: Not started"
+        match = re.search(r"Phase:\s*Not\s+started", content, re.IGNORECASE)
+        if match:
+            result["current_phase"] = "Not started"
+            result["phase_status"] = "not_started"
+            return result
+
+        # Format 4: Generic fallback - "Phase: anything"
+        match = re.search(r"Phase:\s*(.+?)(?:\n|$)", content)
+        if match:
+            result["current_phase"] = match.group(1).strip()
+
+        return result
+
+    def _parse_progress(self, content: str) -> int:
+        """
+        Extract progress percentage from various formats.
+
+        Supports:
+        - Format 1: "Progress: [██████░░░░] 60%"
+        - Format 2: "100% (16/16 plans completed)"
+        - Format 3: Simple percentage on Progress line
+
+        Returns:
+            Progress percentage as integer, or 0 if not found.
+        """
+        try:
+            # Format 1: "Progress: [██████░░░░] 60%"
+            match = re.search(r"Progress:\s*\[.*?\]\s*(\d+)%", content)
+            if match:
+                return int(match.group(1))
+
+            # Format 2: "100% (16/16 plans completed)"
+            match = re.search(r"(\d+)%\s*\(\d+/\d+\s+plans?\s+completed\)", content)
+            if match:
+                return int(match.group(1))
+
+            # Format 3: Simple percentage on Progress line
+            match = re.search(r"Progress:.*?(\d+)%", content)
+            if match:
+                return int(match.group(1))
+
+            return 0
+        except (ValueError, AttributeError):
+            return 0
+
     def parse_state(self) -> Dict[str, Any]:
-        """Parses STATE.md for progress and status."""
+        """
+        Parses STATE.md for progress and status.
+
+        Supports multiple format variations for phase and progress information.
+        Returns enriched dict with structured fields for dashboard consumption.
+        """
         state_file = self.planning_path / "STATE.md"
         if not state_file.exists():
             return {}
 
         content = state_file.read_text(encoding="utf-8")
         data = {}
-        
-        # Extract Phase info
-        phase_match = re.search(r"Phase: (\d+ of \d+ \(.*?\))", content)
-        if phase_match:
-            data["current_phase"] = phase_match.group(1)
-            
-        # Extract Progress
-        progress_match = re.search(r"Progress: \[.*?\] (\d+%)", content)
-        if progress_match:
-            data["progress_percent"] = int(progress_match.group(1).replace("%", ""))
-        else:
-             data["progress_percent"] = 0
+
+        # Extract phase info (multi-format)
+        phase_data = self._parse_state_phase(content)
+        data.update(phase_data)
+
+        # Extract progress (multi-format)
+        data["progress_percent"] = self._parse_progress(content)
 
         # Extract Last Activity
-        activity_match = re.search(r"Last activity: (.*)", content)
+        activity_match = re.search(r"Last activity:\s*(.*)", content)
         if activity_match:
-            data["last_activity"] = activity_match.group(1)
-            
-        # Velocity / Specs
-        velocity_match = re.search(r"Average duration: (.*)", content)
-        if velocity_match:
-            data["avg_duration"] = velocity_match.group(1)
+            data["last_activity"] = activity_match.group(1).strip()
 
-        # Extract Status
-        status_match = re.search(r"Status: (.*)", content)
+        # Velocity / Specs
+        velocity_match = re.search(r"Average duration:\s*(.*)", content)
+        if velocity_match:
+            data["avg_duration"] = velocity_match.group(1).strip()
+
+        # Extract Status (if not already set by phase parser)
+        status_match = re.search(r"Status:\s*(.*)", content)
         if status_match:
-            data["phase_status"] = status_match.group(1).strip()
+            if "phase_status" not in data:
+                data["phase_status"] = status_match.group(1).strip()
 
         return data
 
