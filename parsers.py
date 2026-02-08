@@ -402,7 +402,7 @@ class GSDParser:
         todos_dir = self.planning_path / "todos" / "pending"
         if not todos_dir.exists():
             return []
-            
+
         todos = []
         for file in todos_dir.glob("*.md"):
             # prettify filename: 2026-02-07-settings-detail-page-refactor.md -> Settings detail page refactor
@@ -413,9 +413,26 @@ class GSDParser:
             name = name.replace("-", " ")
             # Capitalize
             name = name.capitalize()
-            
+
             todos.append({"text": name, "checked": False})
-            
+
+        return todos
+
+    def parse_completed_todos(self) -> List[Dict[str, Any]]:
+        """Parses completed todos from .planning/todos/done directory."""
+        todos_dir = self.planning_path / "todos" / "done"
+        if not todos_dir.exists():
+            return []
+
+        todos = []
+        for file in todos_dir.glob("*.md"):
+            name = file.stem
+            name = re.sub(r"^\d{4}-\d{2}-\d{2}-", "", name)
+            name = name.replace("-", " ")
+            name = name.capitalize()
+            todos.append({"text": name, "checked": True})
+
+        todos.sort(key=lambda x: x["text"])
         return todos
 
     def get_latest_phase_summary(self) -> Optional[str]:
@@ -440,5 +457,7 @@ class GSDParser:
             "state": self.parse_state(),
             "phase_docs": self.parse_phase_docs(),
             "pending_todos": self.parse_pending_todos(),
+            "completed_todos": self.parse_completed_todos(),
             "latest_summary": self.get_latest_phase_summary(),
+            "inferred_active_phase": self.infer_active_phase_from_roadmap(),
         }
