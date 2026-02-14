@@ -698,6 +698,195 @@ class TestParseCompletedTodos:
         assert result[2]["text"] == "C task"
 
 
+class TestParseStateTodos:
+    """Tests for parsing pending todos from STATE.md."""
+
+    def test_parse_state_todos_basic(self, parser):
+        """Test parsing basic pending todos from STATE.md."""
+        state_file = parser.planning_path / "STATE.md"
+        content = """# Project State
+
+### Pending Todos
+- [ ] Add dark mode support
+- [ ] Fix sidebar layout
+"""
+        state_file.write_text(content)
+
+        result = parser._parse_state_todos(content)
+
+        assert len(result) == 2
+        assert result[0] == {"text": "Add dark mode support", "checked": False}
+        assert result[1] == {"text": "Fix sidebar layout", "checked": False}
+
+    def test_parse_state_todos_none(self, parser):
+        """Test parsing when section has no items."""
+        content = """# Project State
+
+### Pending Todos
+
+### Blockers/Concerns
+"""
+
+        result = parser._parse_state_todos(content)
+
+        assert result == []
+
+    def test_parse_state_todos_missing_section(self, parser):
+        """Test parsing when Pending Todos section is missing."""
+        content = """# Project State
+
+Phase: 1 of 2 (Setup)
+"""
+
+        result = parser._parse_state_todos(content)
+
+        assert result == []
+
+    def test_parse_state_todos_in_parse_state(self, parser):
+        """Test that parse_state() includes state_todos."""
+        state_file = parser.planning_path / "STATE.md"
+        content = """# Project State
+
+### Pending Todos
+- [ ] Implement feature X
+"""
+        state_file.write_text(content)
+
+        result = parser.parse_state()
+
+        assert "state_todos" in result
+        assert len(result["state_todos"]) == 1
+        assert result["state_todos"][0]["text"] == "Implement feature X"
+
+
+class TestParseStateConcerns:
+    """Tests for parsing blockers/concerns from STATE.md."""
+
+    def test_parse_state_concerns_basic(self, parser):
+        """Test parsing basic concerns from STATE.md."""
+        content = """# Project State
+
+### Blockers/Concerns
+- API rate limits may cause issues
+- Need design review before proceeding
+"""
+
+        result = parser._parse_state_concerns(content)
+
+        assert len(result) == 2
+        assert result[0] == {"text": "API rate limits may cause issues"}
+        assert result[1] == {"text": "Need design review before proceeding"}
+
+    def test_parse_state_concerns_none_marker(self, parser):
+        """Test that 'None.' entries are ignored."""
+        content = """# Project State
+
+### Blockers/Concerns
+- None.
+"""
+
+        result = parser._parse_state_concerns(content)
+
+        assert result == []
+
+    def test_parse_state_concerns_empty_section(self, parser):
+        """Test parsing when section exists but is empty."""
+        content = """# Project State
+
+### Blockers/Concerns
+
+### Pending Todos
+"""
+
+        result = parser._parse_state_concerns(content)
+
+        assert result == []
+
+    def test_parse_state_concerns_missing_section(self, parser):
+        """Test parsing when Blockers/Concerns section is missing."""
+        content = """# Project State
+
+Phase: 1 of 2 (Setup)
+"""
+
+        result = parser._parse_state_concerns(content)
+
+        assert result == []
+
+    def test_parse_state_concerns_in_parse_state(self, parser):
+        """Test that parse_state() includes concerns."""
+        state_file = parser.planning_path / "STATE.md"
+        content = """# Project State
+
+### Blockers/Concerns
+- Dependency upgrade blocked
+"""
+        state_file.write_text(content)
+
+        result = parser.parse_state()
+
+        assert "concerns" in result
+        assert len(result["concerns"]) == 1
+        assert result["concerns"][0]["text"] == "Dependency upgrade blocked"
+
+
+class TestPendingTodosMerge:
+    """Tests for merging pending todos from files and STATE.md."""
+
+    def test_merge_file_and_state_todos(self, parser):
+        """Test merging todos from files and STATE.md."""
+        # File-based todo
+        todos_dir = parser.planning_path / "todos" / "pending"
+        todos_dir.mkdir(parents=True)
+        (todos_dir / "fix-login-bug.md").write_text("")
+
+        # STATE.md todo
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("### Pending Todos\n- [ ] Add search feature\n")
+
+        result = parser.parse_pending_todos()
+
+        texts = [t["text"] for t in result]
+        assert "Fix login bug" in texts
+        assert "Add search feature" in texts
+        assert len(result) == 2
+
+    def test_merge_deduplicates(self, parser):
+        """Test that duplicate todos are deduplicated (case-insensitive)."""
+        todos_dir = parser.planning_path / "todos" / "pending"
+        todos_dir.mkdir(parents=True)
+        (todos_dir / "fix-login-bug.md").write_text("")
+
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("### Pending Todos\n- [ ] Fix login bug\n")
+
+        result = parser.parse_pending_todos()
+
+        assert len(result) == 1
+        assert result[0]["text"] == "Fix login bug"
+
+    def test_merge_only_files(self, parser):
+        """Test when only file-based todos exist (no STATE.md)."""
+        todos_dir = parser.planning_path / "todos" / "pending"
+        todos_dir.mkdir(parents=True)
+        (todos_dir / "task-one.md").write_text("")
+
+        result = parser.parse_pending_todos()
+
+        assert len(result) == 1
+        assert result[0]["text"] == "Task one"
+
+    def test_merge_only_state(self, parser):
+        """Test when only STATE.md todos exist (no files)."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("### Pending Todos\n- [ ] State only task\n")
+
+        result = parser.parse_pending_todos()
+
+        assert len(result) == 1
+        assert result[0]["text"] == "State only task"
+
+
 class TestGetAllDataIntegration:
     """Tests for get_all_data integration with enriched state dict."""
 
@@ -715,6 +904,17 @@ class TestGetAllDataIntegration:
         assert state["total_phases"] == 7
         assert state["progress_percent"] == 60
         assert "current_phase" in state
+
+    def test_get_all_data_includes_concerns(self, parser):
+        """Verify get_all_data() includes concerns from STATE.md."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("### Blockers/Concerns\n- API rate limit risk\n")
+
+        data = parser.get_all_data()
+
+        assert "concerns" in data
+        assert len(data["concerns"]) == 1
+        assert data["concerns"][0]["text"] == "API rate limit risk"
 
     def test_get_all_data_includes_completed_todos_and_inferred_phase(self, parser):
         """Verify get_all_data() includes completed_todos and inferred_active_phase keys."""

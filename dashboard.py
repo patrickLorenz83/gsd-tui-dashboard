@@ -33,9 +33,25 @@ class PulseLabel(Label):
         self.styles.animate("opacity", 0.3, duration=0.8, on_complete=lambda: self.styles.animate("opacity", 1.0, duration=0.8, on_complete=self.pulse))
 
 class RoadmapView(Static):
+    EXPAND_LEVELS = [3, 5, 10, None]  # None = show all
+
     def compose(self) -> ComposeResult:
         yield Label("Roadmap", id="roadmap-header")
         yield Vertical(id="roadmap-list")
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._expand_index = 0
+        self._max_visible = self.EXPAND_LEVELS[0]
+
+    def cycle_expand(self):
+        self._expand_index = (self._expand_index + 1) % len(self.EXPAND_LEVELS)
+        self._max_visible = self.EXPAND_LEVELS[self._expand_index]
+
+    def get_expand_label(self) -> str:
+        if self._max_visible is None:
+            return "All"
+        return str(self._max_visible)
 
     def update_roadmap(self, phases, current_phase_info=None, phase_status=None):
         container = self.query_one("#roadmap-list")
@@ -59,10 +75,31 @@ class RoadmapView(Static):
                     if match:
                          current_phase_num = int(match.group(1))
 
+            # Collapse old completed phases: count leading completed/shipped
+            leading_completed = 0
             for phase in phases:
+                if phase.get("status") in ("completed", "shipped"):
+                    leading_completed += 1
+                else:
+                    break
+
+            # How many to keep visible
+            max_visible = self._max_visible if self._max_visible is not None else leading_completed
+            collapse_count = max(0, leading_completed - max_visible)
+
+            if collapse_count > 0:
+                label = Label(f"  ● {collapse_count} earlier phases completed")
+                label.add_class("collapsed-phases")
+                container.mount(label)
+
+            for i, phase in enumerate(phases):
+                # Skip collapsed phases
+                if i < collapse_count:
+                    continue
+
                 status = phase.get("status", "pending")
                 icon = "○"
-                if status == "completed":
+                if status in ("completed", "shipped"):
                     icon = "●"
                 elif status == "in_progress":
                     icon = "◐"
@@ -123,6 +160,28 @@ class TodosView(Static):
                     container.mount(label)
         except Exception as e:
             container.mount(Label(f"Error displaying todos: {str(e)}"))
+
+class ConcernsView(Static):
+    def compose(self) -> ComposeResult:
+        yield Label("Blockers / Concerns", id="concerns-header")
+        yield Vertical(id="concerns-list")
+
+    def update_concerns(self, concerns):
+        container = self.query_one("#concerns-list")
+        try:
+            container.remove_children()
+
+            if not concerns:
+                container.mount(Label("No concerns.", classes="empty-state"))
+                return
+
+            for concern in concerns:
+                text = concern.get("text", "Unknown concern")
+                label = Label(f"  \u26a0 {text}")
+                label.add_class("concern-item")
+                container.mount(label)
+        except Exception as e:
+            container.mount(Label(f"Error displaying concerns: {str(e)}"))
 
 class ProjectStatsView(Static):
     def compose(self) -> ComposeResult:
@@ -223,7 +282,7 @@ class GSDDashboardApp(App):
         height: 100%;
     }
 
-    #roadmap-header, #active-header, #stats-header {
+    #roadmap-header, #active-header, #stats-header, #concerns-header {
         background: $primary;
         color: $text;
         dock: top;
@@ -256,6 +315,15 @@ class GSDDashboardApp(App):
         padding: 1;
     }
     
+    #right-pane Label, #right-pane Static {
+        width: 100%;
+    }
+
+    .collapsed-phases {
+        color: $text-muted;
+        text-style: dim italic;
+    }
+
     .active-phase {
         color: $success;
         text-style: bold;
@@ -265,6 +333,10 @@ class GSDDashboardApp(App):
     .completed-todo {
         color: $text-muted;
         text-style: dim;
+    }
+
+    .concern-item {
+        color: orange;
     }
 
     .empty-state {
@@ -279,6 +351,7 @@ class GSDDashboardApp(App):
         ("q", "quit", "Quit"),
         ("r", "refresh_data", "Refresh Data"),
         ("t", "toggle_refresh", "Toggle Auto-Refresh"),
+        ("e", "expand_roadmap", "Expand Roadmap"),
         ("left", "prev_tab", "Previous Tab"),
         ("right", "next_tab", "Next Tab"),
     ]
@@ -303,6 +376,7 @@ class GSDDashboardApp(App):
                     with Vertical(id="right-pane"):
                         yield ProjectStatsView(id="stats-view")
                         yield TodosView(id="active-tasks-view")
+                        yield ConcernsView(id="concerns-view")
             
             with TabPane("Summary", id="summary"):
                  yield FocusableMarkdown(id="md-summary", classes="scrollable-md")
@@ -375,6 +449,12 @@ class GSDDashboardApp(App):
     def action_toggle_refresh(self):
         self.auto_refresh = not self.auto_refresh
 
+    def action_expand_roadmap(self):
+        roadmap_view = self.query_one("#roadmap-view", RoadmapView)
+        roadmap_view.cycle_expand()
+        self.notify(f"Roadmap: show last {roadmap_view.get_expand_label()}")
+        self.action_refresh_data()
+
     def action_refresh_data(self):
         try:
             data = self.parser.get_all_data()
@@ -385,6 +465,7 @@ class GSDDashboardApp(App):
 
             pending_todos = data.get("pending_todos", [])
             completed_todos = data.get("completed_todos", [])
+            concerns = data.get("concerns", [])
             latest_summary = data.get("latest_summary", "*No summary found for current phase.*")
 
             current_phase = state_data.get('current_phase', '')
@@ -404,6 +485,7 @@ class GSDDashboardApp(App):
             self.query_one("#roadmap-view").update_roadmap(roadmap_data.get("phases", []), target_phase_info, target_status)
             self.query_one("#stats-view").update_stats(state_data)
             self.query_one("#active-tasks-view").update_todos(pending_todos, completed_todos)
+            self.query_one("#concerns-view").update_concerns(concerns)
 
             # Update Markdown Tabs
             self.query_one("#md-summary").update(latest_summary)

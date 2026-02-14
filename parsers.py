@@ -309,6 +309,58 @@ class GSDParser:
         except (ValueError, AttributeError):
             return 0
 
+    def _parse_state_todos(self, content: str) -> List[Dict[str, Any]]:
+        """
+        Parse pending todos from STATE.md '### Pending Todos' section.
+
+        Extracts '- [ ] text' checkbox lines.
+
+        Returns:
+            List of dicts with 'text' and 'checked' keys.
+        """
+        todos = []
+        in_section = False
+
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped == "### Pending Todos":
+                in_section = True
+                continue
+            if in_section and stripped.startswith("### "):
+                break
+            if in_section and stripped.startswith("- [ ] "):
+                text = stripped[6:].strip()
+                if text:
+                    todos.append({"text": text, "checked": False})
+
+        return todos
+
+    def _parse_state_concerns(self, content: str) -> List[Dict[str, Any]]:
+        """
+        Parse blockers/concerns from STATE.md '### Blockers/Concerns' section.
+
+        Extracts '- text' lines, ignoring 'None.' entries.
+
+        Returns:
+            List of dicts with 'text' key.
+        """
+        concerns = []
+        in_section = False
+
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped == "### Blockers/Concerns":
+                in_section = True
+                continue
+            if in_section and stripped.startswith("### "):
+                break
+            if in_section and stripped.startswith("- "):
+                text = stripped[2:].strip()
+                if text and text.lower() != "none.":
+                    concerns.append({"text": text})
+
+        return concerns
+
     def parse_state(self) -> Dict[str, Any]:
         """
         Parses STATE.md for progress and status.
@@ -345,6 +397,10 @@ class GSDParser:
         if status_match:
             if "phase_status" not in data:
                 data["phase_status"] = status_match.group(1).strip()
+
+        # Extract todos and concerns from STATE.md sections
+        data["state_todos"] = self._parse_state_todos(content)
+        data["concerns"] = self._parse_state_concerns(content)
 
         return data
 
@@ -419,23 +475,31 @@ class GSDParser:
         return docs
 
     def parse_pending_todos(self) -> List[Dict[str, Any]]:
-        """Parses pending todos from .planning/todos/pending directory."""
-        todos_dir = self.planning_path / "todos" / "pending"
-        if not todos_dir.exists():
-            return []
-
+        """Parses pending todos from .planning/todos/pending directory and STATE.md."""
         todos = []
-        for file in todos_dir.glob("*.md"):
-            # prettify filename: 2026-02-07-settings-detail-page-refactor.md -> Settings detail page refactor
-            name = file.stem
-            # Remove date prefix if present
-            name = re.sub(r"^\d{4}-\d{2}-\d{2}-", "", name)
-            # Replace dashes with spaces
-            name = name.replace("-", " ")
-            # Capitalize
-            name = name.capitalize()
 
-            todos.append({"text": name, "checked": False})
+        # From files
+        todos_dir = self.planning_path / "todos" / "pending"
+        if todos_dir.exists():
+            for file in todos_dir.glob("*.md"):
+                # prettify filename: 2026-02-07-settings-detail-page-refactor.md -> Settings detail page refactor
+                name = file.stem
+                # Remove date prefix if present
+                name = re.sub(r"^\d{4}-\d{2}-\d{2}-", "", name)
+                # Replace dashes with spaces
+                name = name.replace("-", " ")
+                # Capitalize
+                name = name.capitalize()
+
+                todos.append({"text": name, "checked": False})
+
+        # Merge STATE.md todos (deduplicate by text, case-insensitive)
+        existing_texts = {t["text"].lower() for t in todos}
+        state = self.parse_state()
+        for todo in state.get("state_todos", []):
+            if todo["text"].lower() not in existing_texts:
+                todos.append(todo)
+                existing_texts.add(todo["text"].lower())
 
         return todos
 
@@ -472,13 +536,15 @@ class GSDParser:
 
     def get_all_data(self) -> Dict[str, Any]:
         """Aggregates all data."""
+        state = self.parse_state()
         return {
             "project": self.parse_project(),
             "roadmap": self.parse_roadmap(),
-            "state": self.parse_state(),
+            "state": state,
             "phase_docs": self.parse_phase_docs(),
             "pending_todos": self.parse_pending_todos(),
             "completed_todos": self.parse_completed_todos(),
+            "concerns": state.get("concerns", []),
             "latest_summary": self.get_latest_phase_summary(),
             "inferred_active_phase": self.infer_active_phase_from_roadmap(),
         }
