@@ -154,6 +154,29 @@ class TestParseRoadmapTable:
         assert len(result["phases"]) == 1
         assert result["phases"][0]["name"] == "Phase 1: Setup"
 
+    def test_parse_table_dash_format(self, parser):
+        """Test parsing table with dash-separated phase names: '1 - Foundation'."""
+        roadmap = parser.project_path / ".planning" / "ROADMAP.md"
+        content = """# Progress Tracking
+
+| Phase | Status | Requirements | Success Criteria | Completion |
+|-------|--------|--------------|------------------|------------|
+| 1 - Foundation & Type Safety | ✓ Complete (2026-02-14) | 5 | 5 | 100% |
+| 2 - LLM Provider Migration | Planned | 3 | 5 | 0% |
+| 3 - MCP Server Integration | Pending | 7 | 6 | 0% |
+"""
+        roadmap.write_text(content)
+
+        result = parser.parse_roadmap()
+
+        assert len(result["phases"]) == 3
+        assert result["phases"][0]["name"] == "Phase 1: Foundation & Type Safety"
+        assert result["phases"][0]["status"] == "completed"
+        assert result["phases"][1]["name"] == "Phase 2: LLM Provider Migration"
+        assert result["phases"][1]["status"] == "pending"
+        assert result["phases"][2]["name"] == "Phase 3: MCP Server Integration"
+        assert result["phases"][2]["status"] == "pending"
+
     def test_parse_table_with_shipped_status(self, parser):
         """Test parsing table format with 'Shipped' status."""
         roadmap = parser.project_path / ".planning" / "ROADMAP.md"
@@ -402,6 +425,27 @@ class TestParseStatePhaseFormats:
         assert result["total_phases"] == 2
         assert result["phase_name"] == "Robust Parsing"
 
+    def test_parse_state_bold_markdown_phase(self, parser):
+        """Test parsing bold markdown format: '**Phase:** 1 - Foundation & Type Safety'."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("**Phase:** 1 - Foundation & Type Safety\n")
+
+        result = parser.parse_state()
+
+        assert result["phase_number"] == 1
+        assert result["phase_name"] == "Foundation & Type Safety"
+        assert "1" in result["current_phase"]
+
+    def test_parse_state_dash_phase_format(self, parser):
+        """Test parsing dash format: 'Phase: 3 - MCP Server Integration'."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("Phase: 3 - MCP Server Integration\n")
+
+        result = parser.parse_state()
+
+        assert result["phase_number"] == 3
+        assert result["phase_name"] == "MCP Server Integration"
+
     def test_parse_state_missing_phase_line(self, parser):
         """Test parsing content without Phase line."""
         state_file = parser.planning_path / "STATE.md"
@@ -459,6 +503,24 @@ class TestParseStateProgressFormats:
         result = parser.parse_state()
 
         assert result["progress_percent"] == 75
+
+    def test_parse_state_progress_requirements_format(self, parser):
+        """Test parsing progress with 'requirements' instead of 'plans': '38% (10/26 requirements)'."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("[████████░░░░░░░░░░░░] 38% (10/26 requirements)\n")
+
+        result = parser.parse_state()
+
+        assert result["progress_percent"] == 38
+
+    def test_parse_state_progress_bar_no_prefix(self, parser):
+        """Test parsing progress bar without 'Progress:' prefix."""
+        state_file = parser.planning_path / "STATE.md"
+        state_file.write_text("[██████░░░░] 60%\n")
+
+        result = parser.parse_state()
+
+        assert result["progress_percent"] == 60
 
     def test_parse_state_no_progress_line(self, parser):
         """Test parsing content without progress line."""

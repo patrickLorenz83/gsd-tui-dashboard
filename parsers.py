@@ -79,6 +79,7 @@ class GSDParser:
             | 1. Foundation | v1.0 | 3/3 | Complete |
             | 2. Features | v1.0 | 5/5 | In Progress |
             | 3. Polish | v1.0 | 0/2 | Not started |
+            | 1 - Foundation & Type Safety | ✓ Complete (2026-02-14) | 5 | 5 | 100% |
 
         Returns:
             Dict with name, description, and status, or None if not a valid table row.
@@ -90,34 +91,35 @@ class GSDParser:
         # Split by | and clean up
         parts = [p.strip() for p in stripped.split("|") if p.strip()]
 
-        # Need at least 4 columns: Phase, Milestone, Plans, Status
-        if len(parts) < 4:
+        if len(parts) < 3:
             return None
 
-        # Skip header row (contains "Phase" as first word) and separator row
+        # Skip header row and separator row
         first_part = parts[0].lower()
         if "phase" in first_part or parts[0].startswith("-"):
             return None
 
         # Extract phase number and title from first column
-        # Format: "1. Title" or "1. Title text"
-        phase_match = re.match(r"(\d+)\.\s*(.*)", parts[0])
+        # Supports: "1. Title", "1 - Title", "1 – Title", "1 — Title"
+        phase_match = re.match(r"(\d+)[\.\s]*[-–—]\s*(.*)", parts[0])
+        if not phase_match:
+            phase_match = re.match(r"(\d+)\.\s*(.*)", parts[0])
         if not phase_match:
             return None
 
         phase_num = phase_match.group(1)
         phase_title = phase_match.group(2).strip()
 
-        # Extract status from last column (4th column)
-        status_text = parts[3].lower()
-
-        # Map status text to standard status
-        if "complete" in status_text or "shipped" in status_text:
-            status = "completed"
-        elif "progress" in status_text or "active" in status_text:
-            status = "in_progress"
-        else:
-            status = "pending"
+        # Search ALL columns for status keywords (column order varies)
+        status = "pending"
+        for part in parts[1:]:
+            part_lower = part.lower()
+            if "complete" in part_lower or "shipped" in part_lower or "✓" in part:
+                status = "completed"
+                break
+            elif "progress" in part_lower or "active" in part_lower:
+                status = "in_progress"
+                break
 
         return {
             "name": f"Phase {phase_num}: {phase_title}",
@@ -210,9 +212,11 @@ class GSDParser:
 
         Supports:
         - Format 1: "Phase: 5 of 7 (Template Versioning)"
+        - Format 1b: "**Phase:** 5 of 7 (Template Versioning)"
         - Format 2: "Phase: v1.0 complete — 7 of 7 phases shipped"
         - Format 3: "Phase: Not started"
-        - Format 4: Generic fallback - "Phase: anything"
+        - Format 4: "**Phase:** 1 - Foundation & Type Safety"
+        - Format 5: Generic fallback - "Phase: anything"
 
         Returns:
             Dict with phase information (phase_number, total_phases, phase_name,
@@ -220,8 +224,11 @@ class GSDParser:
         """
         result = {}
 
+        # Normalize: strip bold markdown from "**Phase:**" -> "Phase:"
+        normalized = re.sub(r'\*\*Phase:\*\*', 'Phase:', content)
+
         # Format 1: "Phase: 5 of 7 (Template Versioning)"
-        match = re.search(r"Phase:\s*(\d+)\s+of\s+(\d+)\s*\(([^)]+)\)", content)
+        match = re.search(r"Phase:\s*(\d+)\s+of\s+(\d+)\s*\(([^)]+)\)", normalized)
         if match:
             result["phase_number"] = int(match.group(1))
             result["total_phases"] = int(match.group(2))
@@ -232,7 +239,7 @@ class GSDParser:
         # Format 2: "Phase: v1.0 complete — 7 of 7 phases shipped"
         match = re.search(
             r"Phase:\s*(v[\d\.]+)\s+complete\s*[—\-]\s*(\d+)\s+of\s+(\d+)\s+phases?\s+shipped",
-            content
+            normalized
         )
         if match:
             result["milestone_version"] = match.group(1)
@@ -243,14 +250,22 @@ class GSDParser:
             return result
 
         # Format 3: "Phase: Not started"
-        match = re.search(r"Phase:\s*Not\s+started", content, re.IGNORECASE)
+        match = re.search(r"Phase:\s*Not\s+started", normalized, re.IGNORECASE)
         if match:
             result["current_phase"] = "Not started"
             result["phase_status"] = "not_started"
             return result
 
-        # Format 4: Generic fallback - "Phase: anything"
-        match = re.search(r"Phase:\s*(.+?)(?:\n|$)", content)
+        # Format 4: "Phase: 1 - Foundation & Type Safety"
+        match = re.search(r"Phase:\s*(\d+)\s*[-–—]\s*(.+?)(?:\n|$)", normalized)
+        if match:
+            result["phase_number"] = int(match.group(1))
+            result["phase_name"] = match.group(2).strip()
+            result["current_phase"] = f"{match.group(1)} ({match.group(2).strip()})"
+            return result
+
+        # Format 5: Generic fallback - "Phase: anything"
+        match = re.search(r"Phase:\s*(.+?)(?:\n|$)", normalized)
         if match:
             result["current_phase"] = match.group(1).strip()
 
@@ -264,6 +279,7 @@ class GSDParser:
         - Format 1: "Progress: [██████░░░░] 60%"
         - Format 2: "100% (16/16 plans completed)"
         - Format 3: Simple percentage on Progress line
+        - Format 4: "[████████░░░░] 38% (10/26 requirements)" (no Progress: prefix)
 
         Returns:
             Progress percentage as integer, or 0 if not found.
@@ -274,13 +290,18 @@ class GSDParser:
             if match:
                 return int(match.group(1))
 
-            # Format 2: "100% (16/16 plans completed)"
-            match = re.search(r"(\d+)%\s*\(\d+/\d+\s+plans?\s+completed\)", content)
+            # Format 2: "100% (16/16 plans completed)" or "38% (10/26 requirements)"
+            match = re.search(r"(\d+)%\s*\(\d+/\d+\s+[\w\s]+?\)", content)
             if match:
                 return int(match.group(1))
 
             # Format 3: Simple percentage on Progress line
             match = re.search(r"Progress:.*?(\d+)%", content)
+            if match:
+                return int(match.group(1))
+
+            # Format 4: Progress bar without prefix "[████░░░░] 38%"
+            match = re.search(r"\[[\u2588\u2591\u2592\u2593█░▓▒ ]+\]\s*(\d+)%", content)
             if match:
                 return int(match.group(1))
 
